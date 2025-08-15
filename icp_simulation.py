@@ -121,7 +121,8 @@ class LidarSimulator:
                     hit_point_local = R_lidar.T @ (hit_point_world - ray_origin_world)
                     # Added noise
                     noise = np.random.normal(0, 0.01, 3)
-                    points.append(hit_point_local + noise)
+                    # points.append(hit_point_local + noise)
+                    points.append(hit_point_local)
 
         # Convert points to Open3D PointCloud
         if points:
@@ -635,9 +636,9 @@ if __name__ == "__main__":
 
     # Define static environment (cubes remain in fixed world positions)
     cube_positions = [
-        (14.0, 5.0, 1.0, 2.0),   # Cube 1
+        # (14.0, 5.0, 1.0, 2.0),   # Cube 1
         (17.0, -6.0, 1.0, 2.0),  # Cube 2 
-        (10.0, 10.0, 1.5, 3.0),  # Cube 3
+        # (10.0, 10.0, 1.5, 3.0),  # Cube 3
     ]
      
     # define lidar poses
@@ -678,8 +679,8 @@ if __name__ == "__main__":
 
     import os
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    pcd_source_path = os.path.join(current_dir, "lidar_scan_source.pcd")  # Source scan
-    pcd_target_path = os.path.join(current_dir, "lidar_scan_target.pcd")  # Target scan
+    pcd_source_path = os.path.join(current_dir, "sim_data/lidar_scan_source.pcd")  # Source scan
+    pcd_target_path = os.path.join(current_dir, "sim_data/lidar_scan_target.pcd")  # Target scan
 
     o3d.io.write_point_cloud(pcd_source_path, pcd_source)
     o3d.io.write_point_cloud(pcd_target_path, pcd_target)
@@ -707,9 +708,9 @@ if __name__ == "__main__":
     try:
         choice = input("\nEnter choice (1/2/3/4) [default=4]: ").strip()
         if choice == '':
-            choice = '3'
+            choice = '4'
     except:
-        choice = '3'
+        choice = '4'
     
     if choice in ['1', '4']:
         # Visualize both poses together with separate coordinate frames

@@ -23,7 +23,6 @@ class ICPResult:
         self.correspondence_set = correspondence_set if correspondence_set is not None else []
         self.num_iterations = num_iterations
 
-
 def estimate_normals_simple(points, k=20):
     """
     Estimate normals for point cloud using PCA on local neighborhoods.
@@ -71,7 +70,6 @@ def estimate_normals_simple(points, k=20):
     
     return normals
 
-
 def find_correspondences(source_points, target_points, max_distance=0.5):
     """
     Find point correspondences between source and target point clouds.
@@ -98,10 +96,9 @@ def find_correspondences(source_points, target_points, max_distance=0.5):
     
     return source_indices, target_indices, distances
 
-
 def find_correspondences_with_normals(source_points, target_points, 
                                      source_normals, target_normals,
-                                     max_distance=0.5, max_normal_angle=25.0):
+                                     max_distance=0.5, max_normal_angle=45.0):
     """
     Find correspondences using both spatial and normal information.
     Enhanced version that considers normal compatibility for better matching.
@@ -169,7 +166,6 @@ def find_correspondences_with_normals(source_points, target_points,
             distances.append(best_match[2])
     
     return np.array(source_indices), np.array(target_indices), np.array(distances)
-
 
 def estimate_transformation_point_to_plane(source_points, target_points, target_normals, 
                                          source_indices, target_indices):
@@ -253,7 +249,6 @@ def estimate_transformation_point_to_plane(source_points, target_points, target_
     
     return T
 
-
 def compute_fitness_and_rmse(source_points, target_points, target_normals,
                            source_indices, target_indices, transformation, 
                            max_distance=0.5):
@@ -301,7 +296,6 @@ def compute_fitness_and_rmse(source_points, target_points, target_normals,
     
     return fitness, inlier_rmse
 
-
 def transform_points(points, transformation):
     """
     Transform points using a 4x4 transformation matrix.
@@ -322,6 +316,28 @@ def transform_points(points, transformation):
     # Convert back to 3D coordinates
     return transformed_homogeneous[:, :3]
 
+def preprocess_point_cloud_simple(points, voxel_size=0.1):
+    """
+    Simple point cloud preprocessing: voxel downsampling.
+    
+    Args:
+        points (np.ndarray): Input points of shape (N, 3)
+        voxel_size (float): Voxel size for downsampling
+        
+    Returns:
+        np.ndarray: Downsampled points
+    """
+    if voxel_size <= 0:
+        return points
+    
+    # Simple voxel grid downsampling
+    min_coords = np.min(points, axis=0)
+    voxel_indices = np.floor((points - min_coords) / voxel_size).astype(int)
+    
+    # Get unique voxels
+    unique_voxels, unique_indices = np.unique(voxel_indices, axis=0, return_index=True)
+    
+    return points[unique_indices]
 
 def icp_point_to_plane(source_points, target_points, source_normals=None, target_normals=None,
                        initial_guess=None, max_iterations=100, tolerance=1e-6, 
@@ -448,6 +464,149 @@ def icp_point_to_plane(source_points, target_points, source_normals=None, target
         num_iterations=iteration + 1
     )
 
+def icp_point_to_plane_with_method_choice(source_points, target_points, source_normals=None, target_normals=None,
+                                        initial_guess=None, max_iterations=100, tolerance=1e-6, 
+                                        max_correspondence_distance=0.5, use_normals=True, verbose=False):
+    """
+    Point-to-Plane ICP implementation that allows choosing correspondence method.
+    
+    Args:
+        source_points (np.ndarray): Source point cloud of shape (N, 3)
+        target_points (np.ndarray): Target point cloud of shape (M, 3)
+        source_normals (np.ndarray, optional): Source normals of shape (N, 3)
+        target_normals (np.ndarray, optional): Target normals of shape (M, 3)
+        initial_guess (np.ndarray, optional): Initial 4x4 transformation matrix
+        max_iterations (int): Maximum number of ICP iterations
+        tolerance (float): Convergence tolerance for transformation change
+        max_correspondence_distance (float): Maximum distance for valid correspondences
+        use_normals (bool): Whether to use normal-aware correspondence (if normals available)
+        verbose (bool): Print iteration details
+        
+    Returns:
+        ICPResult: Object containing transformation, fitness, RMSE, and other metrics
+    """
+    
+    # Initialize transformation
+    if initial_guess is None:
+        current_transformation = np.eye(4)
+    else:
+        current_transformation = initial_guess.copy()
+    
+    # Estimate normals if not provided
+    if target_normals is None:
+        if verbose:
+            print("Estimating target normals...")
+        target_normals = estimate_normals_simple(target_points)
+    
+    if source_normals is None:
+        if verbose:
+            print("Estimating source normals...")
+        source_normals = estimate_normals_simple(source_points)
+    
+    # Initialize variables for iteration
+    prev_error = float('inf')
+    best_transformation = current_transformation.copy()
+    best_fitness = 0.0
+    best_rmse = float('inf')
+    
+    start_time = time.time()
+    
+    for iteration in range(max_iterations):
+        # Transform source points with current estimate
+        source_transformed = transform_points(source_points, current_transformation)
+        
+        # Transform source normals if available and using normals
+        source_normals_transformed = None
+        if use_normals:
+            R = current_transformation[:3, :3]
+            source_normals_transformed = (R @ source_normals.T).T
+            # Normalize to ensure unit vectors
+            norms = np.linalg.norm(source_normals_transformed, axis=1, keepdims=True)
+            norms[norms == 0] = 1  # Avoid division by zero
+            source_normals_transformed = source_normals_transformed / norms
+        
+        # Find correspondences using chosen method
+        if use_normals:
+            source_indices, target_indices, distances = find_correspondences_with_normals(
+                source_transformed, target_points, source_normals_transformed, target_normals,
+                max_correspondence_distance, max_normal_angle=60.0)
+        else:
+            source_indices, target_indices, distances = find_correspondences(
+                source_transformed, target_points, max_correspondence_distance)
+        
+        if len(source_indices) < 6:
+            if verbose:
+                print(f"Iteration {iteration}: Insufficient correspondences ({len(source_indices)})")
+            break
+        
+        # Estimate transformation increment
+        delta_transformation = estimate_transformation_point_to_plane(
+            source_transformed, target_points, target_normals, 
+            source_indices, target_indices)
+        
+        # Update total transformation
+        current_transformation = delta_transformation @ current_transformation
+        
+        # Compute fitness and RMSE
+        fitness, rmse = compute_fitness_and_rmse(
+            source_points, target_points, target_normals,
+            source_indices, target_indices, current_transformation,
+            max_correspondence_distance)
+        
+        # Check for improvement
+        if fitness > best_fitness or (fitness == best_fitness and rmse < best_rmse):
+            best_transformation = current_transformation.copy()
+            best_fitness = fitness
+            best_rmse = rmse
+        
+        # Check convergence
+        transformation_change = np.linalg.norm(delta_transformation - np.eye(4))
+        
+        if verbose:
+            method_str = "N" if use_normals else "E"
+            print(f"Iteration {iteration:2d} [{method_str}]: correspondences={len(source_indices):4d}, "
+                  f"fitness={fitness:.4f}, RMSE={rmse:.6f}, change={transformation_change:.2e}")
+        
+        if transformation_change < tolerance:
+            if verbose:
+                print(f"Converged after {iteration + 1} iterations")
+            break
+        
+        prev_error = rmse
+    
+    else:
+        if verbose:
+            print(f"Reached maximum iterations ({max_iterations})")
+    
+    # Final correspondence set for the best transformation
+    source_final = transform_points(source_points, best_transformation)
+    if use_normals:
+        R = best_transformation[:3, :3]
+        source_normals_final = (R @ source_normals.T).T
+        norms = np.linalg.norm(source_normals_final, axis=1, keepdims=True)
+        source_normals_final = source_normals_final / norms
+        source_indices, target_indices, distances = find_correspondences_with_normals(
+            source_final, target_points, source_normals_final, target_normals,
+            max_correspondence_distance, max_normal_angle=60.0)
+    else:
+        source_indices, target_indices, distances = find_correspondences(
+            source_final, target_points, max_correspondence_distance)
+    
+    correspondence_set = list(zip(source_indices, target_indices))
+    
+    elapsed_time = time.time() - start_time
+    if verbose:
+        print(f"ICP completed in {elapsed_time:.3f} seconds")
+        print(f"Final: fitness={best_fitness:.6f}, inlier_rmse={best_rmse:.6f}")
+        print(f"Method used: {'Normal-Aware' if use_normals else 'Basic Euclidean'}")
+    
+    return ICPResult(
+        transformation=best_transformation,
+        fitness=best_fitness,
+        inlier_rmse=best_rmse,
+        correspondence_set=correspondence_set,
+        num_iterations=iteration + 1
+    )
 
 def compare_correspondence_methods(source_points, target_points, source_normals, target_normals, 
                                   max_distance=0.5, max_normal_angle=25.0, verbose=True):
@@ -528,193 +687,3 @@ def compare_correspondence_methods(source_points, target_points, source_normals,
         print("="*60)
     
     return results
-
-
-def icp_point_to_plane_with_method_choice(source_points, target_points, source_normals=None, target_normals=None,
-                                        initial_guess=None, max_iterations=100, tolerance=1e-6, 
-                                        max_correspondence_distance=0.5, use_normals=True, verbose=False):
-    """
-    Point-to-Plane ICP implementation that allows choosing correspondence method.
-    
-    Args:
-        source_points (np.ndarray): Source point cloud of shape (N, 3)
-        target_points (np.ndarray): Target point cloud of shape (M, 3)
-        source_normals (np.ndarray, optional): Source normals of shape (N, 3)
-        target_normals (np.ndarray, optional): Target normals of shape (M, 3)
-        initial_guess (np.ndarray, optional): Initial 4x4 transformation matrix
-        max_iterations (int): Maximum number of ICP iterations
-        tolerance (float): Convergence tolerance for transformation change
-        max_correspondence_distance (float): Maximum distance for valid correspondences
-        use_normals (bool): Whether to use normal-aware correspondence (if normals available)
-        verbose (bool): Print iteration details
-        
-    Returns:
-        ICPResult: Object containing transformation, fitness, RMSE, and other metrics
-    """
-    if verbose:
-        method_name = "Normal-Aware" if (use_normals and source_normals is not None and target_normals is not None) else "Basic Euclidean"
-        print(f"Starting Point-to-Plane ICP with {method_name} correspondences...")
-        print(f"Source points: {len(source_points)}, Target points: {len(target_points)}")
-    
-    # Initialize transformation
-    if initial_guess is None:
-        current_transformation = np.eye(4)
-    else:
-        current_transformation = initial_guess.copy()
-    
-    # Check if we can and should use normals
-    can_use_normals = (source_normals is not None and target_normals is not None)
-    will_use_normals = use_normals and can_use_normals
-    
-    if verbose and use_normals and not can_use_normals:
-        print("Warning: Normal-aware correspondence requested but normals not available")
-    
-    # Initialize variables for iteration
-    prev_error = float('inf')
-    best_transformation = current_transformation.copy()
-    best_fitness = 0.0
-    best_rmse = float('inf')
-    
-    start_time = time.time()
-    
-    for iteration in range(max_iterations):
-        # Transform source points with current estimate
-        source_transformed = transform_points(source_points, current_transformation)
-        
-        # Transform source normals if available and using normals
-        source_normals_transformed = None
-        if will_use_normals:
-            R = current_transformation[:3, :3]
-            source_normals_transformed = (R @ source_normals.T).T
-            # Normalize to ensure unit vectors
-            norms = np.linalg.norm(source_normals_transformed, axis=1, keepdims=True)
-            norms[norms == 0] = 1  # Avoid division by zero
-            source_normals_transformed = source_normals_transformed / norms
-        
-        # Find correspondences using chosen method
-        if will_use_normals:
-            source_indices, target_indices, distances = find_correspondences_with_normals(
-                source_transformed, target_points, source_normals_transformed, target_normals,
-                max_correspondence_distance, max_normal_angle=60.0)
-        else:
-            source_indices, target_indices, distances = find_correspondences(
-                source_transformed, target_points, max_correspondence_distance)
-        
-        if len(source_indices) < 6:
-            if verbose:
-                print(f"Iteration {iteration}: Insufficient correspondences ({len(source_indices)})")
-            break
-        
-        # Estimate transformation increment
-        delta_transformation = estimate_transformation_point_to_plane(
-            source_transformed, target_points, target_normals, 
-            source_indices, target_indices)
-        
-        # Update total transformation
-        current_transformation = delta_transformation @ current_transformation
-        
-        # Compute fitness and RMSE
-        fitness, rmse = compute_fitness_and_rmse(
-            source_points, target_points, target_normals,
-            source_indices, target_indices, current_transformation,
-            max_correspondence_distance)
-        
-        # Check for improvement
-        if fitness > best_fitness or (fitness == best_fitness and rmse < best_rmse):
-            best_transformation = current_transformation.copy()
-            best_fitness = fitness
-            best_rmse = rmse
-        
-        # Check convergence
-        transformation_change = np.linalg.norm(delta_transformation - np.eye(4))
-        
-        if verbose:
-            method_str = "N" if will_use_normals else "E"
-            print(f"Iteration {iteration:2d} [{method_str}]: correspondences={len(source_indices):4d}, "
-                  f"fitness={fitness:.4f}, RMSE={rmse:.6f}, change={transformation_change:.2e}")
-        
-        if transformation_change < tolerance:
-            if verbose:
-                print(f"Converged after {iteration + 1} iterations")
-            break
-        
-        prev_error = rmse
-    
-    else:
-        if verbose:
-            print(f"Reached maximum iterations ({max_iterations})")
-    
-    # Final correspondence set for the best transformation
-    source_final = transform_points(source_points, best_transformation)
-    if will_use_normals:
-        R = best_transformation[:3, :3]
-        source_normals_final = (R @ source_normals.T).T
-        norms = np.linalg.norm(source_normals_final, axis=1, keepdims=True)
-        source_normals_final = source_normals_final / norms
-        source_indices, target_indices, distances = find_correspondences_with_normals(
-            source_final, target_points, source_normals_final, target_normals,
-            max_correspondence_distance, max_normal_angle=60.0)
-    else:
-        source_indices, target_indices, distances = find_correspondences(
-            source_final, target_points, max_correspondence_distance)
-    
-    correspondence_set = list(zip(source_indices, target_indices))
-    
-    elapsed_time = time.time() - start_time
-    if verbose:
-        print(f"ICP completed in {elapsed_time:.3f} seconds")
-        print(f"Final: fitness={best_fitness:.6f}, inlier_rmse={best_rmse:.6f}")
-        print(f"Method used: {'Normal-Aware' if will_use_normals else 'Basic Euclidean'}")
-    
-    return ICPResult(
-        transformation=best_transformation,
-        fitness=best_fitness,
-        inlier_rmse=best_rmse,
-        correspondence_set=correspondence_set,
-        num_iterations=iteration + 1
-    )
-
-
-if __name__ == "__main__":
-    # Simple test demonstrating both correspondence methods
-    print("ICP from scratch implementation with dual correspondence methods!")
-    print("="*70)
-    print("Available functions:")
-    print("1. find_correspondences() - Basic Euclidean nearest neighbor")
-    print("2. find_correspondences_with_normals() - Normal-aware correspondence")
-    print("3. compare_correspondence_methods() - Compare both methods")
-    print("4. icp_point_to_plane() - Original ICP implementation")
-    print("5. icp_point_to_plane_with_method_choice() - ICP with method selection")
-    print("="*70)
-    print("Import this module and use these functions in your pointcloud.py script.")
-    print("Example usage:")
-    print("  from icp_scratch import compare_correspondence_methods")
-    print("  results = compare_correspondence_methods(src_pts, tgt_pts, src_norms, tgt_norms)")
-    print("="*70)
-
-
-def preprocess_point_cloud_simple(points, voxel_size=0.1):
-    """
-    Simple point cloud preprocessing: voxel downsampling.
-    
-    Args:
-        points (np.ndarray): Input points of shape (N, 3)
-        voxel_size (float): Voxel size for downsampling
-        
-    Returns:
-        np.ndarray: Downsampled points
-    """
-    if voxel_size <= 0:
-        return points
-    
-    # Simple voxel grid downsampling
-    min_coords = np.min(points, axis=0)
-    voxel_indices = np.floor((points - min_coords) / voxel_size).astype(int)
-    
-    # Get unique voxels
-    unique_voxels, unique_indices = np.unique(voxel_indices, axis=0, return_index=True)
-    
-    return points[unique_indices]
-
-
-

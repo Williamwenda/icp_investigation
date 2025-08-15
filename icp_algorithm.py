@@ -57,8 +57,8 @@ def load_point_clouds():
         script_dir = os.path.dirname(os.path.abspath(__file__))
         
         # Construct full paths to the PCD files
-        pcd_source_path = os.path.join(script_dir, "lidar_scan_source.pcd")
-        pcd_target_path = os.path.join(script_dir, "lidar_scan_target.pcd")
+        pcd_source_path = os.path.join(script_dir, "sim_data/lidar_scan_source.pcd")
+        pcd_target_path = os.path.join(script_dir, "sim_data/lidar_scan_target.pcd")
         
         # Check if files exist
         if not os.path.exists(pcd_source_path):
@@ -401,7 +401,7 @@ if __name__ == "__main__":
     
     # Define specific perturbation values
     perturbation_values = {
-        'dx': 0.0,          
+        'dx': 0.5,          
         'dy': 0.0,          
         'dz': 0.0,          
         'droll_deg': 0.0,    
